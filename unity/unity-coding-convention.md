@@ -1,0 +1,291 @@
+# Unity-Specific Development Guidelines
+
+## Lifecycle & MonoBehaviour
+
+**Do:**
+- Group Unity lifecycle methods (`Awake`, `Start`, etc.) together at the top of the class, immediately after fields/properties.
+  ```csharp
+  // ✅ Good — lifecycle methods grouped at the top
+  public class Enemy : MonoBehaviour
+  {
+      [SerializeField] private float _speed;
+      private Rigidbody _rigidbody;
+
+      private void Awake()      => _rigidbody = GetComponent<Rigidbody>();
+      private void Start()      => ApplyInitialState();
+      private void OnEnable()   => SubscribeToEvents();
+      private void OnDisable()  => UnsubscribeFromEvents();
+
+      private void ApplyInitialState() { ... }
+  }
+  ```
+
+---
+
+**Do:**
+- Keep `MonoBehaviours` thin — delegate all decision-making and math to a separate POCO.
+  ```csharp
+  // ✅ Good — MonoBehaviour only bridges Unity and the POCO
+  public class EnemyMono : MonoBehaviour
+  {
+      private EnemyBrain _brain;
+
+      private void Awake() => _brain = new EnemyBrain();
+      private void Update() => transform.position += _brain.ComputeMovement(Time.deltaTime);
+  }
+
+  public class EnemyBrain   // POCO — with purely mathematical data and logic, no Unity dependencies
+  {
+      // Unity Vector3 is pure math, acceptable in a POCO
+      public Vector3 ComputeMovement(float deltaTime) { ... }
+  }
+  ```
+
+**Avoid:**
+- Avoid putting complex game logic directly inside a MonoBehaviour.
+  ```csharp
+  // ❌ Bad — MonoBehaviour doing all the thinking
+  public class EnemyMono : MonoBehaviour
+  {
+      private void Update()
+      {
+          if (_distanceToPlayer < _detectionRange)
+          {
+              _currentState = EnemyState.Chasing;
+              var dir = (_player.position - transform.position).normalized;
+              transform.position += dir * _speed * Time.deltaTime;
+          }
+      }
+  }
+  ```
+
+----------------------------------------------------------------------------------
+
+## Performance
+
+**Do:**
+- Use `async UniTask` for non-blocking operations.
+
+---
+
+**Do:**
+- Always add timeouts and cancellation tokens to asynchronous operations.
+  ```csharp
+  // ✅ Good — won't hang indefinitely
+  var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+  await LoadEnemyDataAsync(cts.Token);
+  ```
+
+**Avoid:**
+- Avoid firing async operations without a cancellation token or timeout.
+  ```csharp
+  // ❌ Bad — hangs forever if the operation never completes
+  await LoadEnemyDataAsync();
+  ```
+
+---
+
+**Do:**
+- Cache references (`GetComponent`, `Find`) in `Awake`/`Start`.
+  ```csharp
+  // ✅ Good — cached once, reused every frame
+  private Rigidbody _rigidbody;
+  private void Awake() => _rigidbody = GetComponent<Rigidbody>();
+  private void Update() => _rigidbody.AddForce(Vector3.up);
+  ```
+
+**Avoid:**
+- Avoid using search methods like `Find` or `GetComponent` in `Update`.
+  ```csharp
+  // ❌ Bad — GetComponent called every frame
+  private void Update() => GetComponent<Rigidbody>().AddForce(Vector3.up);
+  ```
+
+---
+
+**Do:**
+- Use pooling for frequent instantiation/destruction.
+  ```csharp
+  // ✅ Good — reuses existing objects, no GC pressure
+  var bullet = _bulletPool.Get();
+  bullet.transform.position = _muzzle.position;
+  ```
+
+**Avoid:**
+- Avoid instantiating and destroying objects at high frequency.
+  ```csharp
+  // ❌ Bad — spikes GC every time a bullet is fired or despawned
+  Instantiate(_bulletPrefab, _muzzle.position, Quaternion.identity);
+  Destroy(bullet, 3f);
+  ```
+
+---
+
+**Do:**
+- Use events or UniTask instead of `Update()` where possible.
+  ```csharp
+  // ✅ Good — reacts only when something actually changes
+  private void OnEnable()  => _healthSystem.OnDied += TriggerDeathSequence;
+  private void OnDisable() => _healthSystem.OnDied -= TriggerDeathSequence;
+  ```
+
+**Avoid:**
+- Avoid polling state every frame in `Update()` when an event-driven approach is viable.
+  ```csharp
+  // ❌ Bad — checks death condition 60 times per second unnecessarily
+  private void Update()
+  {
+      if (_healthSystem.IsDead) TriggerDeathSequence();
+  }
+  ```
+
+----------------------------------------------------------------------------------
+
+## Nullability & References
+
+**Avoid:**
+- Avoid checking null or resolving references in code for serialized field. Those fields need to be set in the editor
+  ```csharp
+  // ❌ Bad — null check is redundant if field is serialized by Unity and assigned in the inspector (both private and public)
+  [SerializeField] private Rigidbody _rigidbody;
+
+  private void Awake()
+  {
+      if (_rigidbody == null) _rigidbody = GetComponent<Rigidbody>();
+  }
+  ```
+
+----------------------------------------------------------------------------------
+
+## Exception Handling
+
+**Do:**
+- Use guard clauses and `TryGetComponent` instead of exceptions for expected runtime conditions.
+  ```csharp
+  // ✅ Good — no allocation, no stack unwind, reads cleanly
+  private void Update()
+  {
+      if (!TryFindTarget(out var target)) return;
+      MoveToward(target);
+  }
+  ```
+
+**Avoid:**
+- Avoid throwing exceptions inside runtime loops (`Update`, `FixedUpdate`, coroutines) — they are expensive, allocate heap memory, and can trigger GC spikes.
+  ```csharp
+  // ❌ Bad — exception thrown every frame if target is missing
+  private void Update()
+  {
+      var target = FindTarget(); // throws if none found
+      MoveToward(target);
+  }
+  ```
+
+---
+
+**Do:**
+- Use return values or result patterns for expected or recoverable outcomes.
+  ```csharp
+  // ✅ Good — caller decides what to do when none exists
+  public bool TryFindNearestEnemy(out Enemy enemy)
+  {
+      enemy = _enemies.Count > 0 ? _enemies[0] : null;
+      return enemy != null;
+  }
+  ```
+
+**Avoid:**
+- Avoid using exceptions for expected or recoverable outcomes — they are not control flow.
+  ```csharp
+  // ❌ Bad — exception used as control flow for a normal case
+  public Enemy FindNearestEnemy()
+  {
+      if (_enemies.Count == 0) throw new InvalidOperationException("No enemies found.");
+      return _enemies[0];
+  }
+  ```
+
+----------------------------------------------------------------------------------
+
+## Asset Management (Addressables)
+
+**Do:**
+- Load assets using `Addressables.LoadAssetAsync<T>()`.
+- Track the `AsyncOperationHandle` and release it when done to prevent leaks.
+  ```csharp
+  // ✅ Good — handle is stored and released on cleanup
+  private AsyncOperationHandle<GameObject> _enemyHandle;
+
+  private async UniTask LoadAsync()
+  {
+      _enemyHandle = Addressables.LoadAssetAsync<GameObject>("EnemyPrefab");
+      await _enemyHandle.Task;
+      var prefab = _enemyHandle.Result;
+  }
+
+  private void OnDestroy() => Addressables.Release(_enemyHandle);
+  ```
+
+----------------------------------------------------------------------------------
+
+## Decoupling
+
+**Do:**
+- Use C# Events for inter-system communication instead of UnityEvents.
+  ```csharp
+  // ✅ Good — fast, type-safe, no reflection
+  public class HealthSystem
+  {
+      public event Action OnDied;
+      private void Die() => OnDied?.Invoke();
+  }
+  ```
+
+---
+
+**Do:**
+- Separate event subscription logic from core business logic into a dedicated `Subscriber` MonoBehaviour.
+  ```csharp
+  // ✅ Good — wiring is isolated; both systems remain independently reusable
+  public class EnemyDeathSubscriber : MonoBehaviour
+  {
+      [SerializeField] private HealthSystem _healthSystem;
+      [SerializeField] private ScoreSystem _scoreSystem;
+      [SerializeField] private SpawnSystem _spawnSystem;
+
+      private void OnEnable()
+      {
+          _healthSystem.OnDied += _scoreSystem.AwardPointsWhenEnemyDied;
+          _healthSystem.OnDied += _spawnSystem.RespawnEnemyWhenDied;
+      }
+
+      private void OnDisable()
+      {
+          _healthSystem.OnDied -= _scoreSystem.AwardPointsWhenEnemyDied;
+          _healthSystem.OnDied -= _spawnSystem.RespawnEnemyWhenDied;
+      }
+  }
+  ```
+
+**Avoid:**
+- Avoid mixing event subscription wiring directly into business logic classes, coupling them together.
+  ```csharp
+  // ❌ Bad — HealthSystem now knows about ScoreSystem and SpawnSystem
+  public class HealthSystem : MonoBehaviour
+  {
+      [SerializeField] private ScoreSystem _scoreSystem;
+      [SerializeField] private SpawnSystem _spawnSystem;
+
+      private void OnEnable()
+      {
+          OnDied += _scoreSystem.AwardPointsWhenEnemyDied;
+          OnDied += _spawnSystem.RespawnEnemyWhenDied;
+      }
+  }
+  ```
+----------------------------------------------------------------------------------
+
+## Naming
+
+**Do:**
+- Suffix ScriptableObject names with `SO`.

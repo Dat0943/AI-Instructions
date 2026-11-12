@@ -1,0 +1,46 @@
+# merge.yml -- place this file in your destination folder
+# Run: .\path\to\merge.ps1   (or just .\merge.ps1 if it is on your PATH)
+
+# -------------------------------------------------------------------
+# REQUIRED
+# -------------------------------------------------------------------
+
+# GitHub repo in owner/repo format
+repo: FakeMG/ai-instructions
+
+# Which files to fetch and merge, in order.
+# Just use the filename -- the script will find it anywhere in the repo.
+files:
+  - agent-behaviors-unity.md
+  - coding-convention.md
+  - unity-coding-convention.md
+  - unity-techstack.md
+
+# -------------------------------------------------------------------
+# OPTIONAL
+# -------------------------------------------------------------------
+
+# Branch to pull from.
+branch: master
+
+# Personal Access Token -- only needed for private repos.
+# For public repos you can leave this out entirely.
+# Tip: set the GITHUB_TOKEN environment variable instead of putting
+# your token in this file, so you don't accidentally commit it.
+# token: ghp_xxxxxxxxxxxxxxxxxxxx
+
+# Output filename written into this folder. Default: merged-instructions.md
+output: AGENTS.md
+
+# Adds a heading with timestamp, repo, and source list at the top.
+title: ""
+
+# Text inserted between each merged section. Default: horizontal rule
+separator: "\n\n"
+
+# Adds a <!-- SOURCE: path/to/file.md --> comment before each section.
+add_headers: false
+
+# Exit with error if any listed file is missing from the repo.
+# Set to false to silently skip missing files.
+fail_on_missing: true
